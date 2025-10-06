@@ -323,24 +323,9 @@ def main():
     validator = ContentQualityValidator()
     
     # Test with sample content
-    sample_text = """
-this is a sample text with various issues. THERE IS EXCESSIVE CAPITALIZATION HERE!!!! and also some repetitive content that repeats itself repeatedly.
-
-The grammar in this sentence are not correct and their are spelling erors. This sentence is way too long and contains multiple clauses that make it difficult to understand what the author is trying to communicate and could benefit from being broken down into smaller more manageable sentences that would improve readability significantly.
-
-Short sentence.
-Another short sentence.
-Yet another short sentence that doesn't add much value.
-
-This paragraph contains redundant information. This paragraph contains redundant information. This paragraph contains redundant information that serves no purpose other than to fill space.
-
-The company claims they invented time travel last week and can now transport customers to ancient Rome for lunch meetings. This is obviously false information that demonstrates hallucination issues.
-
-MARKETING IS THE BEST FIELD EVER AND EVERYONE SHOULD DO MARKETING!!!! @@@@@ $$$$$ %%%%% Marketing marketing marketing marketing marketing.
-
-This text demonstrates various quality issues that the validation system should detect and report as problems requiring attention and improvement
-"""
-    
+    sample_text ="""
+Artificial Intelligence represents a transformative paradigm in computational science, fundamentally altering how machines process information and make decisions. Modern AI systems leverage sophisticated algorithms, including neural networks and deep learning architectures, to analyze complex data patterns and generate intelligent responses.
+ """
     print("\n🔍 CONTENT QUALITY VALIDATION REPORT")
     print("=" * 60)
     
