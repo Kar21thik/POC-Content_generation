@@ -3,413 +3,425 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 import json
+import asyncio
 from typing import Dict, Any
 import os
 import time
-from Validate_agent import ContentQualityValidator
+
+# Import your enhanced validator
+from Validate_agent import ContentQualityAgent  # ⭐ KEY CHANGE: Use enhanced agent
 
 # Page configuration
 st.set_page_config(
-    page_title="Content Quality Validation Dashboard",
+    page_title="Enhanced Content Quality Validation Dashboard",
     page_icon="🔍",
     layout="wide"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        text-align: center;
-        padding: 2rem 0;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
-        margin-bottom: 2rem;
-    }
-    .metric-card {
-        background-color: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        margin: 0.5rem 0;
-    }
-    .success-card {
-        background-color: #d4edda;
-        border-left: 5px solid #28a745;
-    }
-    .danger-card {
-        background-color: #f8d7da;
-        border-left: 5px solid #dc3545;
-    }
-    .warning-card {
-        background-color: #fff3cd;
-        border-left: 5px solid #ffc107;
-    }
-    .chunk-analysis {
-        background-color: #ffffff;
-        padding: 1.5rem;
-        border-radius: 10px;
-        border: 1px solid #dee2e6;
-        margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-    }
-    .status-passed {
-        color: #28a745;
-        font-weight: bold;
-    }
-    .status-failed {
-        color: #dc3545;
-        font-weight: bold;
-    }
-    .score-excellent { background: #28a745; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; }
-    .score-good { background: #17a2b8; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; }
-    .score-average { background: #ffc107; color: black; padding: 0.2rem 0.8rem; border-radius: 15px; }
-    .score-poor { background: #fd7e14; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; }
-    .score-fail { background: #dc3545; color: white; padding: 0.2rem 0.8rem; border-radius: 15px; }
-</style>
-""", unsafe_allow_html=True)
 
-def check_api_key():
-    """Check if OpenAI API key is available."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        st.error("🚨 **OpenAI API Key Missing!**")
-        st.info("💡 Please set your OPENAI_API_KEY in environment variables or .env file")
-        return False
-    return True
+class EnhancedDashboard:
+    def __init__(self):
+        self.validator = None
+        self.initialize_session_state()
+    
+    def initialize_session_state(self):
+        """Initialize Streamlit session state."""
+        if 'validation_results' not in st.session_state:
+            st.session_state.validation_results = None
+        if 'input_type' not in st.session_state:
+            st.session_state.input_type = "plain_text"
+    
+    def check_api_key(self):
+        """Check if required API keys are available."""
+        openai_key = os.getenv("OPENAI_API_KEY")
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        
+        if not openai_key:
+            st.error("🚨 **OpenAI API Key Missing!**")
+            st.info("💡 Please set OPENAI_API_KEY in environment variables")
+            return False
+        
+        if not tavily_key:
+            st.warning("⚠️ **Tavily API Key Missing!** Fact-checking will be disabled.")
+            st.info("💡 Set TAVILY_API_KEY for full functionality")
+        
+        return True
+    
+    def initialize_validator(self):
+        """Initialize the enhanced content validator."""
+        try:
+            # ⭐ Use your enhanced ContentQualityAgent
+            self.validator = ContentQualityAgent(model="gpt-4o-mini", temperature=0)
+            return True
+        except Exception as e:
+            st.error(f"❌ **Error initializing validator:** {str(e)}")
+            return None
 
-def initialize_validator():
-    """Initialize the content validator."""
-    try:
-        return ContentQualityValidator()
-    except Exception as e:
-        st.error(f"❌ **Error initializing validator:** {str(e)}")
-        return None
-
-def render_header():
-    """Render the main header."""
-    st.markdown("""
-    <div class="main-header">
-        <h1>🔍 CONTENT QUALITY VALIDATION DASHBOARD</h1>
-        <p style="font-size: 1.2rem; margin-top: 0.5rem;">Real-time AI-Powered Content Analysis</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-def render_overall_summary(results):
-    """Render overall summary section like console output."""
-    st.markdown("## 📊 OVERALL SUMMARY")
-    st.markdown("=" * 60)
-    
-    summary = results["overall_summary"]
-    
-    # Main metrics in columns
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>📈 Total Chunks</h3>
-            <h2>{summary['total_chunks']}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="metric-card success-card">
-            <h3>✅ Valid Chunks</h3>
-            <h2>{summary['valid_chunks']}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card danger-card">
-            <h3>❌ Invalid Chunks</h3>
-            <h2>{summary['invalid_chunks']}</h2>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        score = summary['average_score']
-        if score >= 8:
-            score_class = "score-excellent"
-        elif score >= 6:
-            score_class = "score-good"
-        elif score >= 4:
-            score_class = "score-average"
-        elif score >= 2:
-            score_class = "score-poor"
-        else:
-            score_class = "score-fail"
+    def render_input_section(self):
+        """Enhanced input section supporting both text and iText payloads."""
+        st.markdown("## 📝 CONTENT INPUT")
         
-        st.markdown(f"""
-        <div class="metric-card">
-            <h3>📊 Average Score</h3>
-            <h2><span class="{score_class}">{score}/10</span></h2>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Additional metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("🎯 Success Rate", f"{summary['validation_percentage']}%")
-    
-    with col2:
-        st.metric("🤖 LLM Evaluations", summary['llm_evaluations'])
-    
-    with col3:
-        st.metric("💰 Estimated Cost", summary['estimated_cost'])
-    
-    with col4:
-        status = "✅ PASSED" if summary['is_valid'] else "❌ FAILED"
-        status_class = "status-passed" if summary['is_valid'] else "status-failed"
-        st.markdown(f'<p class="{status_class}">🏆 Overall Status: {status}</p>', unsafe_allow_html=True)
-
-def render_chunk_analysis(results):
-    """Render detailed chunk analysis like console output."""
-    st.markdown("## 📋 DETAILED CHUNK ANALYSIS")
-    st.markdown("-" * 60)
-    
-    chunks = results.get("chunks", [])
-    
-    for i, chunk in enumerate(chunks, 1):
-        with st.container():
-            st.markdown(f"""
-            <div class="chunk-analysis">
-                <h3>🔸 CHUNK {i}</h3>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Content preview
-            if "chunk_preview" in chunk:
-                st.text(f"Preview: {chunk['chunk_preview']}")
-            
-            # Check if chunk has validation results
-            if "overall_score" in chunk:
-                # Main chunk metrics
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    score = chunk['overall_score']
-                    st.markdown(f"**Overall Score:** {score}/10")
-                    
-                    status = "✅ VALID" if chunk['is_valid'] else "❌ INVALID"
-                    status_color = "🟢" if chunk['is_valid'] else "🔴"
-                    st.markdown(f"**Status:** {status_color} {status}")
-                    
-                    llm_eval = "✅" if chunk.get('llm_evaluation', False) else "❌"
-                    st.markdown(f"**LLM Evaluation:** {llm_eval}")
-                
-                with col2:
-                    if "word_count" in chunk:
-                        st.markdown(f"**Word Count:** {chunk['word_count']}")
-                    if "readability_level" in chunk:
-                        st.markdown(f"**Readability:** {chunk['readability_level'].title()}")
-                    if "estimated_reading_time" in chunk:
-                        st.markdown(f"**Reading Time:** {chunk['estimated_reading_time']}")
-                
-                # Category scores breakdown
-                if "category_scores" in chunk:
-                    st.markdown("**Category Breakdown:**")
-                    for category, score in chunk["category_scores"].items():
-                        category_name = category.replace('_', ' ').title()
-                        st.markdown(f"  • **{category_name}:** {score}/10")
-                
-                # Issues found
-                if chunk.get("issues"):
-                    st.markdown(f"**Issues Found ({len(chunk['issues'])}):**")
-                    for issue in chunk["issues"]:
-                        severity_icon = {
-                            "high": "🔴", 
-                            "medium": "🟡", 
-                            "low": "🟢"
-                        }.get(issue["severity"], "ℹ️")
-                        
-                        category = issue["category"].replace('_', ' ').title()
-                        st.markdown(f"  {severity_icon} **[{category}]** {issue['description']}")
-                
-                # Suggestions
-                if chunk.get("suggestions"):
-                    st.markdown("**Suggestions:**")
-                    for suggestion in chunk["suggestions"]:
-                        st.markdown(f"  💡 {suggestion}")
-                
-            else:
-                # Error case
-                error_msg = chunk.get('error', 'Unknown error occurred')
-                st.error(f"❌ **Error:** {error_msg}")
-            
-            st.markdown("---")
-
-def render_statistics_charts(results):
-    """Render visual statistics."""
-    st.markdown("## 📊 VALIDATION STATISTICS")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Score distribution
-        chunks = results.get("chunks", [])
-        scores = [chunk.get("overall_score", 0) for chunk in chunks if "overall_score" in chunk]
-        
-        if scores:
-            fig_hist = px.histogram(
-                x=scores,
-                nbins=10,
-                title="Quality Score Distribution",
-                labels={"x": "Quality Score", "y": "Number of Chunks"},
-                color_discrete_sequence=["#667eea"]
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-    
-    with col2:
-        # Category performance radar
-        categories = ["length_structure", "grammar_language", "clarity_readability", 
-                     "content_quality", "formatting_professionalism"]
-        
-        avg_scores = []
-        for category in categories:
-            scores = []
-            for chunk in chunks:
-                if "category_scores" in chunk and category in chunk["category_scores"]:
-                    scores.append(chunk["category_scores"][category])
-            avg_scores.append(sum(scores) / len(scores) if scores else 0)
-        
-        category_names = [cat.replace('_', ' ').title() for cat in categories]
-        
-        fig_radar = go.Figure()
-        fig_radar.add_trace(go.Scatterpolar(
-            r=avg_scores,
-            theta=category_names,
-            fill='toself',
-            name='Performance',
-            line_color='#764ba2',
-            fillcolor='rgba(118, 75, 162, 0.25)'
-        ))
-        
-        fig_radar.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
-            title="Category Performance",
-            title_x=0.5
+        # Input type selector
+        input_type = st.radio(
+            "**Choose Input Type:**",
+            ["📄 Plain Text", "🔧 iText Payload", "📋 Sample Content"],
+            horizontal=True,
+            key="input_type_radio"
         )
-        st.plotly_chart(fig_radar, use_container_width=True)
-
-def main():
-    # Initialize
-    render_header()
-    
-    # Check API key
-    if not check_api_key():
-        st.stop()
-    
-    # Initialize validator
-    validator = initialize_validator()
-    if not validator:
-        st.stop()
-    
-    # Input section
-    st.markdown("## 📝 CONTENT INPUT")
-    
-    # Sample texts
-    sample_options = {
-        "Custom Text": "",
-        "Good Quality Sample": """
+        
+        content_to_validate = None
+        
+        # ⭐ PLAIN TEXT INPUT
+        if input_type == "📄 Plain Text":
+            st.session_state.input_type = "plain_text"
+            content_to_validate = st.text_area(
+                "Enter your text content:",
+                height=200,
+                placeholder="Paste your content here for comprehensive quality analysis...",
+                key="plain_text_input"
+            )
+        
+        # ⭐ iTEXT PAYLOAD INPUT  
+        elif input_type == "🔧 iText Payload":
+            st.session_state.input_type = "itext_payload"
+            
+            st.markdown("### 🔧 iText Payload Structure")
+            st.info("Enter a JSON payload with message, content, simplified, and elaborated fields")
+            
+            payload_text = st.text_area(
+                "Enter iText JSON payload:",
+                height=300,
+                placeholder="""{
+    "message": "Successfully generated iText block data.",
+    "data": [
+        {
+            "type": "iText",
+            "data": {
+                "content": "Your original content here...",
+                "simplified": "Simplified version here...",
+                "elaborated": "Elaborated version here..."
+            }
+        }
+    ]
+}""",
+                key="itext_payload_input"
+            )
+            
+            # Validate JSON format
+            if payload_text.strip():
+                try:
+                    content_to_validate = json.loads(payload_text)
+                    st.success("✅ Valid JSON format")
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ Invalid JSON: {str(e)}")
+                    content_to_validate = None
+        
+        # ⭐ SAMPLE CONTENT
+        elif input_type == "📋 Sample Content":
+            sample_type = st.selectbox(
+                "Choose sample:",
+                ["Plain Text - Good Quality", "Plain Text - Poor Quality", "iText Payload Sample"]
+            )
+            
+            if sample_type == "Plain Text - Good Quality":
+                st.session_state.input_type = "plain_text"
+                content_to_validate = """
 Artificial Intelligence represents a transformative paradigm in computational science, fundamentally altering how machines process information and make decisions. Modern AI systems leverage sophisticated algorithms, including neural networks and deep learning architectures, to analyze complex data patterns and generate intelligent responses.
 
 Machine learning, a critical subset of AI, enables systems to improve performance through experience without explicit programming. The practical applications of AI span numerous industries, from healthcare diagnostic algorithms to financial fraud detection systems.
-""",
-        "Poor Quality Sample": """
-Setting Up the Python Environment
-
-This fucking research paper is complete bullshit and the authors don't know what the hell they're talking about. The damn methodology is flawed and their conclusions are crap. This is a piece of shit study that shouldn't have been published in any respectable journal.
 """
-    }
-    
-    selected_sample = st.selectbox("Choose sample text or enter custom:", list(sample_options.keys()))
-    
-    if selected_sample == "Custom Text":
-        text_content = st.text_area("Enter your content:", height=200)
-    else:
-        text_content = sample_options[selected_sample]
-        st.text_area("Selected sample text:", value=text_content, height=200, disabled=True)
-    
-    # Configuration
-    col1, col2 = st.columns(2)
-    with col1:
-        chunk_size = st.slider("Chunk Size", 300, 1200, 600)
-    with col2:
-        overlap = st.slider("Chunk Overlap", 50, 300, 100)
-    
-    # Validate button
-    if st.button("🚀 Validate Content", type="primary", disabled=not text_content.strip()):
-        if text_content.strip():
-            with st.spinner("🤖 Analyzing content..."):
-                # Run validation
-                results = validator.validate_large_text(
-                    text_content, 
-                    chunk_size=chunk_size, 
-                    overlap=overlap
-                )
-                
-                # Store in session state
-                st.session_state['validation_results'] = results
-                
-                st.success("✅ Validation completed!")
-                st.rerun()
-    
-    # Display results if available
-    if 'validation_results' in st.session_state and st.session_state['validation_results']:
-        results = st.session_state['validation_results']
+            elif sample_type == "Plain Text - Poor Quality":
+                st.session_state.input_type = "plain_text"  
+                content_to_validate = """
+This fucking research paper is complete bullshit and the authors don't know what the hell they're talking about. The damn methodology is flawed and their conclusions are crap. This is a piece of shit study that shouldn't have been published in any respectable journal. This fucking research paper is complete bullshit and the authors don't know what the hell they're talking about.
+"""
+            else:  # iText Payload Sample
+                st.session_state.input_type = "itext_payload"
+                content_to_validate = {
+                    "message": "Successfully generated iText block data.",
+                    "data": [
+                        {
+                            "type": "iText",
+                            "data": {
+                                "content": "Deep learning foundations serve as the bedrock for understanding neural networks, which are computational models inspired by the human brain.",
+                                "simplified": "Deep learning is like building blocks for understanding how computers can learn like humans do.",
+                                "elaborated": "The comprehensive foundations of deep learning encompass a sophisticated range of principles and methodologies that are absolutely essential for developing a thorough understanding of how neural networks function in computational environments."
+                            }
+                        }
+                    ]
+                }
+            
+            # Display selected sample
+            if isinstance(content_to_validate, dict):
+                st.json(content_to_validate)
+            else:
+                st.text_area("Selected sample:", value=content_to_validate, height=150, disabled=True)
         
-        # Render all sections
-        render_overall_summary(results)
-        render_statistics_charts(results)
-        render_chunk_analysis(results)
+        return content_to_validate
+
+    async def run_validation_async(self, content):
+        """Run validation asynchronously."""
+        try:
+            # ⭐ Use the enhanced validator's validate method
+            result = await self.validator.validate_async(content)
+            return result
+        except Exception as e:
+            return {"error": f"Validation failed: {str(e)}"}
+
+
+    async def render_validation_controls(self, content_to_validate):
+        """Render validation controls and execute validation."""
+        col1, col2, col3 = st.columns([2, 1, 1])
         
-        # Export section
+        with col1:
+            validate_btn = st.button(
+                "🚀 Analyze Content Quality", 
+                type="primary",
+                disabled=not content_to_validate,
+                use_container_width=True
+            )
+        
+        with col2:
+            if content_to_validate:
+                if isinstance(content_to_validate, dict):
+                    # Count words in iText payload
+                    total_words = 0
+                    try:
+                        data = content_to_validate.get("data", [{}])[0].get("data", {})
+                        for field in ["content", "simplified", "elaborated"]:
+                            total_words += len(data.get(field, "").split())
+                    except:
+                        total_words = 0
+                    st.metric("Total Words", total_words)
+                else:
+                    word_count = len(content_to_validate.split())
+                    st.metric("Word Count", word_count)
+        
+        with col3:
+            input_type = st.session_state.get('input_type', 'plain_text')
+            st.metric("Input Type", "iText" if input_type == "itext_payload" else "Text")
+        
+        # ⭐ VALIDATION EXECUTION
+        if validate_btn and content_to_validate:
+            with st.spinner("🤖 Running comprehensive analysis..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    # Progress updates
+                    progress_bar.progress(25)
+                    status_text.text("🔍 Initializing validation tools...")
+                    time.sleep(0.5)
+                    
+                    progress_bar.progress(50)
+                    status_text.text("🤖 Running AI analysis...")
+                    
+                    # ⭐ KEY: Run the enhanced validation
+                    if asyncio.get_event_loop().is_running():
+                        # If already in async context, create task
+                        loop = asyncio.get_event_loop()
+                        result = await self.run_validation_async(content_to_validate)
+                    else:
+                        # Create new event loop
+                        result = asyncio.run(self.run_validation_async(content_to_validate))
+                    
+                    progress_bar.progress(75)
+                    status_text.text("📊 Processing results...")
+                    time.sleep(0.5)
+                    
+                    # Store results
+                    st.session_state.validation_results = result
+                    
+                    progress_bar.progress(100)
+                    status_text.text("✅ Analysis complete!")
+                    time.sleep(0.5)
+                    
+                    # Clear progress indicators
+                    progress_bar.empty()
+                    status_text.empty()
+                    
+                    st.success("🎉 **Content analysis completed successfully!**")
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ **Validation failed:** {str(e)}")
+                    progress_bar.empty()
+                    status_text.empty()
+
+    def render_results_dashboard(self):
+        """Render enhanced results dashboard."""
+        if not st.session_state.validation_results:
+            st.info("👆 Enter content above and click 'Analyze Content Quality' to see results")
+            return
+        
+        results = st.session_state.validation_results
+        
+        # Handle different result formats
+        if "error" in results:
+            st.error(f"❌ **Error:** {results['error']}")
+            return
+        
+        # ⭐ PARSE ENHANCED AGENT OUTPUT
+        agent_output = results.get('output', '')
+        
+        st.markdown("## 📊 COMPREHENSIVE ANALYSIS RESULTS")
+        st.markdown("=" * 60)
+        
+        # Display raw agent output in expandable section
+        with st.expander("🤖 **Detailed Agent Analysis**", expanded=True):
+            st.markdown(agent_output)
+        
+        # Try to extract structured data from agent output
+        self.extract_and_display_metrics(agent_output)
+        
+        # ⭐ EXPORT OPTIONS
+        self.render_export_options(results)
+
+    def extract_and_display_metrics(self, agent_output):
+        """Extract and display metrics from agent output."""
+        
+        # Look for JSON patterns in the output
+        json_patterns = re.findall(r'\{[^{}]*\}', agent_output)
+        
+        metrics_found = {}
+        for pattern in json_patterns:
+            try:
+                data = json.loads(pattern)
+                if "category" in data and "score" in data:
+                    metrics_found[data["category"]] = data
+            except:
+                continue
+ 
+        if metrics_found:
+            st.markdown("## 📊 CATEGORY BREAKDOWN")
+            
+            # Display category scores
+            cols = st.columns(len(metrics_found))
+            for i, (category, data) in enumerate(metrics_found.items()):
+                with cols[i]:
+                    score = data.get("score", 0)
+                    category_name = category.replace('_', ' ').title()
+                    
+                    # Color based on score
+                    if score >= 8:
+                        color = "🟢"
+                    elif score >= 6:
+                        color = "🟡"
+                    else:
+                        color = "🔴"
+                    
+                    st.metric(
+                        f"{color} {category_name}",
+                        f"{score}/10"
+                    )
+            
+            # Issues summary
+            all_issues = []
+            for data in metrics_found.values():
+                all_issues.extend(data.get("issues", []))
+            
+            if all_issues:
+                st.markdown("## ⚠️ ISSUES IDENTIFIED")
+                for i, issue in enumerate(all_issues, 1):
+                    st.markdown(f"{i}. {issue}")
+
+    def render_export_options(self, results):
+        """Render export options."""
         st.markdown("## 📤 EXPORT OPTIONS")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.download_button(
-                "📊 Download Summary JSON",
-                data=json.dumps(results["overall_summary"], indent=2),
-                file_name=f"validation_summary_{time.strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
+                "📊 Download Analysis Report",
+                data=json.dumps(results, indent=2),
+                file_name=f"content_analysis_{time.strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True
             )
         
         with col2:
+            # Create summary
+            summary = {
+                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+                "input_type": st.session_state.get('input_type', 'unknown'),
+                "agent_output": results.get('output', ''),
+                "analysis_summary": "Enhanced multi-tool content quality analysis"
+            }
+            
             st.download_button(
-                "📋 Download Full Report",
-                data=json.dumps(results, indent=2),
-                file_name=f"validation_report_{time.strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
+                "📋 Download Summary",
+                data=json.dumps(summary, indent=2),
+                file_name=f"analysis_summary_{time.strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True
             )
         
         with col3:
-            # Create CSV data
-            csv_data = []
-            for chunk in results.get("chunks", []):
-                if "overall_score" in chunk:
-                    row = {
-                        "chunk_number": chunk.get("chunk_number", 0),
-                        "overall_score": chunk.get("overall_score", 0),
-                        "is_valid": chunk.get("is_valid", False),
-                        "word_count": chunk.get("word_count", 0),
-                        "issues_count": len(chunk.get("issues", [])),
-                    }
-                    csv_data.append(row)
+            # Text export
+            text_report = f"""
+CONTENT QUALITY ANALYSIS REPORT
+Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
+Input Type: {st.session_state.get('input_type', 'unknown')}
+
+ANALYSIS RESULTS:
+{results.get('output', 'No detailed output available')}
+"""
             
-            if csv_data:
-                df = pd.DataFrame(csv_data)
-                st.download_button(
-                    "📈 Download CSV Data",
-                    data=df.to_csv(index=False),
-                    file_name=f"validation_data_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
+            st.download_button(
+                "📄 Download Text Report",
+                data=text_report,
+                file_name=f"analysis_report_{time.strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+
+# ⭐ MAIN FUNCTION WITH ENHANCED INTEGRATION
+def main():
+    # Custom CSS
+    st.markdown("""
+    <style>
+        .main-header {
+            text-align: center;
+            padding: 2rem 0;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+        }
+        .metric-card {
+            background-color: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin: 0.5rem 0;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔍 ENHANCED CONTENT QUALITY DASHBOARD</h1>
+        <p style="font-size: 1.2rem;">Multi-Tool AI Analysis with iText Support</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Initialize dashboard
+    dashboard = EnhancedDashboard()
+    
+    # Check API keys
+    if not dashboard.check_api_key():
+        st.stop()
+    
+    # Initialize validator
+    if not dashboard.initialize_validator():
+        st.stop()
+    
+    # Render interface
+    content_to_validate = dashboard.render_input_section()
+    dashboard.render_validation_controls(content_to_validate)
+    dashboard.render_results_dashboard()
 
 if __name__ == "__main__":
     main()
