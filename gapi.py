@@ -13,11 +13,13 @@ import textstat
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from better_profanity import profanity
-# --- Google Generative AI Imports ---
-import google.generativeai as genai
-from google.generativeai import GenerativeModel
 
-# You'll need to refactor your code to use the official SDK
+# --- Google ADK Imports ---
+import google.ai.adk as adk
+from google.ai.adk.models import Gemini
+from google.ai.adk.tools import google_search
+from google.ai.adk.config import load_config_from_env
+
 # ==============================================================================
 # 1. INITIAL SETUP (Env, Logging)
 # ==============================================================================
@@ -310,4 +312,4 @@ if __name__ == "__main__":
     print("Press CTRL+C to stop the server")
     
     # Use the name of this file ("api_google_adk")
-    uvicorn.run("gapi:app", host="127.0.0.1", port=3000, reload=True)
+    uvicorn.run("api_google_adk:app", host="127.0.0.1", port=3000, reload=True)
