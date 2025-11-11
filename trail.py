@@ -13,7 +13,9 @@ import uvicorn
 import pymongo
 import textstat
 from motor.motor_asyncio import AsyncIOMotorClient
+# --- CHANGED: Import InvalidId for error handling ---
 from bson import ObjectId
+from bson.errors import InvalidId
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -34,7 +36,6 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 load_dotenv()
 
 # Setup professional logging
-# --- CHANGED: Read log level from .env, default to INFO ---
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -154,7 +155,6 @@ def check_redundancy(text: str) -> str:
 # ==============================================================================
 
 class ContentQualityAgent:
-    # --- CHANGED: Constructor now takes model and temp as arguments ---
     def __init__(self, model: str, temperature: float):
         logging.info(f"Initializing LLM with model={model}, temperature={temperature}")
         self.llm = ChatOpenAI(model=model, temperature=temperature)
@@ -216,7 +216,7 @@ class ContentQualityAgent:
         ])
         
         agent = create_openai_functions_agent(self.llm, tools, prompt)
-        self.agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=(log_level == "DEBUG")) # <-- CHANGED: Verbose if DEBUG
+        self.agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=(log_level == "DEBUG"))
 
     async def validate_async(self, input_text: str) -> Dict[str, Any]:
         """Runs the agent asynchronously on a plain text string."""
@@ -227,7 +227,6 @@ class ContentQualityAgent:
         try:
             result = await self.agent_executor.ainvoke({"input": prompt})
             
-            # --- Robust JSON parsing ---
             json_match = re.search(r'\{.*\}', result['output'], re.DOTALL)
             if json_match:
                 return json.loads(json_match.group(0))
@@ -256,31 +255,25 @@ app = FastAPI(
 # ==============================================================================
 
 class ValidationRequest(BaseModel):
-    """Defines the expected JSON input for the /validate endpoint."""
     plain_text: str
     save_report: bool = False
     source_document_id: Optional[str] = None
 
 class DBValidationRequest(BaseModel):
-    """Defines the input for the /validate-from-db endpoint."""
     source_collection: str
     source_document_id: str
     field_to_check: str
 
-# --- 🚀 NEW CODE ADDED HERE ---
 class StructuredDocRequest(BaseModel):
-    """Defines the input for the /validate-structured-doc endpoint."""
     source_collection: str
     source_document_id: str
-# --- END OF NEW CODE ---
 
 # ==============================================================================
 # 6. MONGODB CONFIG & HELPERS
 # ==============================================================================
 
-# --- CHANGED: Read DB name from .env, default to "quality_db" ---
 DB_NAME = os.getenv("MONGODB_DB_NAME", "quality_db")
-REPORTS_COLLECTION = "reports" # This is the collection where reports will be SAVED
+REPORTS_COLLECTION = "reports" 
 
 # ==============================================================================
 # 7. GLOBAL AGENT INITIALIZATION
@@ -289,17 +282,14 @@ REPORTS_COLLECTION = "reports" # This is the collection where reports will be SA
 logging.info("🚀 Initializing Content Quality Agent for the API...")
 validator: Optional[ContentQualityAgent] = None
 
-# Check for all required API keys
 if not os.getenv("OPENAI_API_KEY") or not os.getenv("TAVILY_API_KEY"):
     logging.critical("❌ FATAL ERROR: API keys (OPENAI_API_KEY, TAVILY_API_KEY) must be in .env file.")
     validator = None
-# --- CHANGED: Check for MONGODB_URL ---
 elif not os.getenv("MONGODB_URL"):
     logging.critical("❌ FATAL ERROR: MONGODB_URL must be in .env file.")
     validator = None
 else:
     try:
-        # --- CHANGED: Load model config from .env ---
         model_name = os.getenv("MODEL_NAME", "gpt-4o-mini")
         temperature = float(os.getenv("TEMPERATURE", 0.0))
         
@@ -316,14 +306,12 @@ else:
 @app.on_event("startup")
 async def startup_db_client():
     """Connect to MongoDB on server startup."""
-    # --- CHANGED: Read MONGODB_URL ---
     mongodb_uri = os.getenv("MONGODB_URL")
     if mongodb_uri:
         logging.info(f"Connecting to MongoDB at {mongodb_uri}...")
         app.state.mongodb_client = AsyncIOMotorClient(mongodb_uri)
-        app.state.db = app.state.mongodb_client[DB_NAME] # DB_NAME is now from your .env
+        app.state.db = app.state.mongodb_client[DB_NAME] 
         
-        # Try to connect and log server info to confirm connection
         try:
             await app.state.mongodb_client.server_info()
             logging.info(f"✅ Connected to MongoDB (Database: {DB_NAME})")
@@ -332,7 +320,6 @@ async def startup_db_client():
             app.state.mongodb_client = None
             app.state.db = None
     else:
-        # --- CHANGED: Warning for MONGODB_URL ---
         logging.warning("MONGODB_URL not set. Database functionality will be disabled.")
         app.state.mongodb_client = None
         app.state.db = None
@@ -349,6 +336,35 @@ async def shutdown_db_client():
 # ==============================================================================
 # 9. FASTAPI ENDPOINTS
 # ==============================================================================
+
+# --- This is the endpoint I added in the last step ---
+@app.get("/reports/{report_id}", tags=["Reports"])
+async def http_get_report_by_id(report_id: str, fastApiRequest: Request):
+    """
+    Fetch a single, complete quality report from the 'reports' collection by its ID.
+    """
+    if fastApiRequest.app.state.db is None:
+        raise HTTPException(status_code=500, detail="Database is not configured on the server.")
+
+    db = fastApiRequest.app.state.db
+    doc_id = None
+
+    try:
+        doc_id = ObjectId(report_id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail=f"Invalid ID format. '{report_id}' is not a valid ObjectId.")
+    
+    logging.info(f"Fetching report with ID: {doc_id}")
+    report = await db[REPORTS_COLLECTION].find_one({"_id": doc_id})
+
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report not found with ID {report_id}")
+
+    # Convert ObjectId to string for JSON response
+    report["_id"] = str(report["_id"])
+    
+    return report
+
 
 @app.post("/validate", tags=["Validation"])
 async def http_validate_content(request: ValidationRequest, fastApiRequest: Request):
@@ -375,14 +391,12 @@ async def http_validate_content(request: ValidationRequest, fastApiRequest: Requ
         
     logging.info(f"Successfully generated report. Overall score: {report.get('overall_score')}")
 
-    # --- Save report to MongoDB if requested ---
     if request.save_report:
         if fastApiRequest.app.state.db is None:
             logging.warning("Tried to save report, but DB is not configured. Skipping.")
             report["save_status"] = "failed_db_not_configured"
         else:
             try:
-                # Add metadata to the report before saving
                 report_to_save = report.copy()
                 report_to_save["created_at"] = datetime.utcnow()
                 report_to_save["source_text"] = input_to_agent
@@ -406,13 +420,6 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     """
     Fetch a document from MongoDB, run quality analysis on a field,
     and save the report to the 'reports' collection.
-    
-    Example:
-    {
-      "source_collection": "bulk_generate_content_metadata",
-      "source_document_id": "your_mongo_document_id",
-      "field_to_check": "your_field_with_text"
-    }
     """
     if validator is None:
         raise HTTPException(status_code=500, detail="Server not configured. Missing API keys or failed to init.")
@@ -423,7 +430,6 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     db = fastApiRequest.app.state.db
     doc_id = None
 
-    # --- 1. Fetch the document ---
     try:
         doc_id = ObjectId(request.source_document_id)
         logging.info(f"Fetching doc {doc_id} from collection {request.source_collection}")
@@ -434,7 +440,6 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     if not document:
         raise HTTPException(status_code=404, detail=f"Document not found with ID {request.source_document_id} in collection {request.source_collection}")
 
-    # --- 2. Extract the text ---
     text_to_check = document.get(request.field_to_check)
     
     if text_to_check is None:
@@ -442,7 +447,6 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     if not isinstance(text_to_check, str) or not text_to_check.strip():
         raise HTTPException(status_code=400, detail=f"Field '{request.field_to_check}' is empty or not a string.")
 
-    # --- 3. Run Validation ---
     logging.info(f"Invoking agent for DB document: {request.source_document_id}")
     report = await validator.validate_async(text_to_check)
 
@@ -450,7 +454,6 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
         logging.error(f"Agent failed for DB document. Raw output: {report.get('raw_output')}")
         raise HTTPException(status_code=500, detail=report)
 
-    # --- 4. Save the report to MongoDB ---
     logging.info(f"Saving report for document: {request.source_document_id}")
     try:
         report_to_save = report.copy()
@@ -466,22 +469,18 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     
     except Exception as e:
         logging.error(f"Failed to save report to MongoDB: {e}")
-        # Even if saving fails, return the report to the user
         report["save_status"] = f"failed_db_error: {e}"
 
     return report
 
 
-# --- 🚀 NEW (REFACTORED) CODE ---
-# The function below has been rewritten to use an Aggregation Pipeline,
-# removing the inefficient nested Python loops.
-
+# --- 🚀 THIS IS THE ENDPOINT WE ARE CHANGING ---
 @app.post("/validate-structured-doc", tags=["Validation"])
 async def http_validate_structured_doc(request: StructuredDocRequest, fastApiRequest: Request):
     """
-    Fetches a single complex document from MongoDB, finds all text content
-    within its nested outline using an efficient Aggregation Pipeline, 
-    runs quality analysis on each piece, and saves a report for each one.
+    Fetches a single complex document, finds all nested text content,
+    runs quality analysis on each piece, saves all reports,
+    AND returns a single OVERALL SCORE for the entire document.
     """
     if validator is None:
         raise HTTPException(status_code=500, detail="Server not configured. Missing API keys or failed to init.")
@@ -492,10 +491,8 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
     db = fastApiRequest.app.state.db
     doc_id = None
     
-    # --- 1. Validate Document ID and Check Existence ---
     try:
         doc_id = ObjectId(request.source_document_id)
-        # We still fetch the main doc just to ensure it exists before aggregating
         document_exists = await db[request.source_collection].find_one(
             {"_id": doc_id}, 
             projection={"_id": 1}
@@ -508,29 +505,14 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 
     logging.info(f"Starting efficient crawl for doc {doc_id} from {request.source_collection}")
 
-    # --- 2. Define the Aggregation Pipeline ---
-    # This pipeline deconstructs the nested arrays on the SERVER-SIDE,
-    # filters for only the text content we want, and returns a flat list.
-    
     pipeline = [
-        # Stage 1: Match the specific document
         { "$match": { "_id": doc_id } },
-        
-        # Stage 2: Deconstruct the 'sections' array
         { "$unwind": { "path": "$data.outline.sections", "preserveNullAndEmptyArrays": False } },
-        
-        # Stage 3: Deconstruct the 'chapters' array
         { "$unwind": { "path": "$data.outline.sections.chapters", "preserveNullAndEmptyArrays": False } },
-        
-        # Stage 4: Deconstruct the 'learningContent' array
         { "$unwind": { "path": "$data.outline.sections.chapters.learningContent", "preserveNullAndEmptyArrays": False } },
-        
-        # Stage 5: Filter for *only* 'text' type content
         { "$match": { 
             "data.outline.sections.chapters.learningContent.type": "text" 
         }},
-        
-        # Stage 6: Filter for *only* items that have non-empty text
         { "$match": {
             "data.outline.sections.chapters.learningContent.data.content": { 
                 "$exists": True, 
@@ -538,13 +520,9 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
                 "$ne": "" 
             }
         }},
-        
-        # Stage 7: Project into a clean, flat list for our loop
         { "$project": {
-            "_id": 0, # Exclude the default _id
+            "_id": 0,
             "text_to_check": "$data.outline.sections.chapters.learningContent.data.content",
-            
-            # Include 'breadcrumbs' so we know where the text came from
             "source_section_id": "$data.outline.sections.sectionId",
             "source_section_name": "$data.outline.sections.sectionName",
             "source_chapter_id": "$data.outline.sections.chapters.chapterId",
@@ -552,31 +530,41 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
         }}
     ]
 
-    # --- 3. Execute the Pipeline and Process Results ---
     report_ids = []
     reports_failed = 0
+    # --- 🚀 NEW ---
+    # We will collect all scores and summaries here
+    all_scores = []
+    all_summaries = []
     
     try:
-        # The cursor now returns a flat list, no more nested loops!
         cursor = db[request.source_collection].aggregate(pipeline)
         
-        # We now have ONE simple loop instead of three nested ones.
         async for item in cursor:
             text_to_check = item.get("text_to_check")
             
-            if not text_to_check: # Should be caught by pipeline, but as a safeguard
+            if not text_to_check:
                 continue
 
             logging.info(f"Validating text from chapter {item.get('source_chapter_id')}")
             
-            # --- 4. Run Validation on this piece of text ---
             report = await validator.validate_async(text_to_check)
 
             if "error" in report:
                 reports_failed += 1
                 logging.error(f"Agent failed for sub-content. Raw: {report.get('raw_output')}")
             else:
-                # --- 5. Save the individual report ---
+                # --- 🚀 NEW ---
+                # Add the score and summary to our lists
+                score = report.get("overall_score")
+                summary = report.get("summary")
+                if score is not None:
+                    all_scores.append(score)
+                if summary:
+                    # We add the chapter name to make the summary more useful
+                    all_summaries.append(f"Chapter '{item.get('source_chapter_name')}': {summary}")
+
+                # --- This part is the same: we still save the individual report ---
                 try:
                     report_to_save = report.copy()
                     report_to_save["created_at"] = datetime.utcnow()
@@ -584,7 +572,6 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
                     report_to_save["source_collection"] = request.source_collection
                     report_to_save["source_document_id"] = request.source_document_id
                     
-                    # Add the metadata 'breadcrumbs' from our pipeline
                     report_to_save["source_section_id"] = item.get("source_section_id")
                     report_to_save["source_section_name"] = item.get("source_section_name")
                     report_to_save["source_chapter_id"] = item.get("source_chapter_id")
@@ -593,6 +580,7 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
                     insert_result = await db[REPORTS_COLLECTION].insert_one(report_to_save)
                     report_ids.append(str(insert_result.inserted_id))
                 except Exception as save_e:
+                    # If saving fails, we still count the score, but log the error
                     reports_failed += 1
                     logging.error(f"Failed to SAVE report for chapter {item.get('source_chapter_id')}: {save_e}")
 
@@ -602,14 +590,24 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 
     logging.info(f"Crawl complete. Generated {len(report_ids)} reports. Failed: {reports_failed}")
 
+    # --- 🚀 NEW ---
+    # Calculate the final average score
+    final_average_score = 0
+    if all_scores:
+        # We round it to 2 decimal places for a clean look
+        final_average_score = round(sum(all_scores) / len(all_scores), 2)
+
+    # --- 🚀 NEW (REVISED) RESPONSE ---
+    # We return the score and summaries, which is what you wanted!
     return {
         "status": "Validation crawl complete",
         "source_document_id": request.source_document_id,
+        "overall_document_score": final_average_score,
         "reports_generated": len(report_ids),
         "reports_failed": reports_failed,
-        "report_ids": report_ids
+        "summary_of_issues": all_summaries,
+        "report_ids": report_ids # We still include these, just in case
     }
-# --- END OF REFACTORED CODE ---
 
 
 # ==============================================================================
@@ -617,7 +615,6 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 # ==============================================================================
 
 if __name__ == "__main__":
-    # This block is only for direct execution (e.g., `python api.py`)
     print("--- Starting API server in development mode ---")
     print("API docs available at: http://127.0.0.1:3000/docs")
     print("Press CTRL+C to stop the server")
