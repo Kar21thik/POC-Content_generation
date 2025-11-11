@@ -1,0 +1,25 @@
+# streamlit==1.28.0
+# langchain-openai==0.0.5
+# langchain-community==0.0.10
+# langchain-core==0.1.0
+# plotly==5.17.0
+# pandas==2.1.0
+# python-dotenv==1.0.0
+# textstat==0.7.3
+# asyncio-extra==1.3.2
+# Google ADK
+# Google ADK (Agent Development Kit)
+google-adk
+
+# Required for the built-in google_search tool
+google-api-python-client
+
+# FastAPI Server
+fastapi
+uvicorn[standard]
+pydantic
+
+# Local Tools
+textstat
+better-profanity
+python-dotenv

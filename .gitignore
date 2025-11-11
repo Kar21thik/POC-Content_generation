@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual environments
+.env/
+.venv/
+env/
+venv/
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment/config
+.env
+*.env
+
+# Logs
+*.log
+
+# Test output
+htmlcov/
+.coverage
+.tox/
+.cache/
+pytest_cache/
+nosetests.xml
+coverage.xml
+
+# Jupyter
+.ipynb_checkpoints
+
+# MongoDB dump files
+dump/
+*.bson
+*.json
+
+# Uvicorn reload artifacts
+*.reload
+
+# FastAPI OpenAPI cache
+openapi.json
+
+# Misc
+*.bak
+*.swp
+*.tmp
