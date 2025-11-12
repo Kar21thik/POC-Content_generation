@@ -23,15 +23,16 @@ from better_profanity import profanity
 
 # --- LangChain Imports ---
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.tools import Tool
-from langchain_community.tools.tavily_search import TavilySearchResults
+# --- 🚀 Removed AgentExecutor and Tools, they are no longer needed ---
+# from langchain.agents import AgentExecutor, create_openai_functions_agent
+# from langchain.tools import Tool
+# from langchain_community.tools.tavily_search import TavilySearchResults
 
 # ==============================================================================
 # 1. INITIAL SETUP (Env, Logging)
 # ==============================================================================
-
+# ... (No changes here) ...
 # Load environment variables from .env file
 load_dotenv()
 
@@ -41,9 +42,8 @@ logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(mes
 
 # ==============================================================================
 # 2. TOOL LOGIC FUNCTIONS
-# (These are all fast, local tools)
 # ==============================================================================
-
+# ... (All check_... functions are here, no changes) ...
 def check_length_and_structure(text: str) -> str:
     """Analyzes content length and structure (word count, paragraphs)."""
     logging.info(f"Running LengthAndStructureCheck on text (approx {len(text)} chars)")
@@ -84,7 +84,7 @@ def check_readability_with_textstat(text: str) -> str:
     readability_score = 10
     
     if flesch_score < 30: 
-        level = "Very Confusing (College Graduate)"
+        level = "Very Confusing "
         readability_score = 3
     elif flesch_score < 60: 
         level = "Difficult"
@@ -151,44 +151,25 @@ def check_redundancy(text: str) -> str:
     })
 
 # ==============================================================================
-# 3. AGENT CLASS DEFINITION
+# 3. AGENT CLASS DEFINITION (REFACTORED WITH HALLUCINATION CHECK)
 # ==============================================================================
 
 class ContentQualityAgent:
+    
     def __init__(self, model: str, temperature: float):
-        logging.info(f"Initializing LLM with model={model}, temperature={temperature}")
+        logging.info(f"Initializing Synthesizing LLM with model={model}, temperature={temperature}")
         self.llm = ChatOpenAI(model=model, temperature=temperature)
-        self.setup_agent()
+        self.setup_synthesizer()
 
-    def setup_agent(self):
-        tools = [
-            Tool(name="ReadabilityCheck", func=check_readability_with_textstat, description="Use to get the readability score of a piece of text."),
-            Tool(name="ProfessionalismCheck", func=check_professionalism_with_library, description="Use to check a piece of text for unprofessional language."),
-            Tool(name="LengthAndStructureCheck", func=check_length_and_structure, description="Use to get word count and structure of a piece of text."),
-            Tool(name="RedundancyCheck", func=check_redundancy, description="Use to check a piece of text for repetitive sentences."),
-            TavilySearchResults(name="FactCheckSearch", max_results=3, description="Use to verify factual claims in a piece of text.")
-        ]
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert Quality Assurance assistant. Your goal is to provide a complete quality report for a given piece of plain text.
+    def setup_synthesizer(self):
+        self.synthesizer_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an expert Quality Assurance Synthesizer.
+            You will be given the full text of a document AND a set of JSON reports from various quality tools (Readability, Professionalism, etc.).
 
             **Your Job:**
-            1.  You will be given a piece of plain text.
-            2.  You will use your tools (ReadabilityCheck, ProfessionalismCheck, etc.) to get reports on the text.
-            3.  You MUST **perform your own grammar and spelling check** on the original text. Look for spelling mistakes, incorrect punctuation, subject-verb agreement, and incorrect word usage.
-            4.  You will then synthesize all of this information—the tool outputs AND your own grammar analysis—into the final JSON report.
-
-            **Your Plan (What the agent executor will do):**
-            - You will receive a plain text input.
-            - You must run these tools:
-                1.  ReadabilityCheck
-                2.  ProfessionalismCheck
-                3.  LengthAndStructureCheck
-                4.  RedundancyCheck
-                5.  FactCheckSearch (use this *only* if the text makes a specific, verifiable factual claim, e.g., "The sun is 100 miles away").
-            
-            **FINAL ANSWER (Your Synthesis Step):**
-            After all tools run, you will receive their outputs. You must then look at the *original text* again, perform your detailed grammar and spelling check, and then generate the final JSON.
+            1.  You MUST **perform your own grammar and spelling check** on the original text. Look for spelling mistakes, incorrect punctuation, etc.
+            2.  You MUST **perform your own factual accuracy (hallucination) check** on the original text. Use your internal knowledge to find claims that are factually incorrect.
+            3.  You will then synthesize all of this information—the tool reports AND your own analysis—into a final JSON report.
 
             **FINAL ANSWER FORMATTING INSTRUCTIONS:**
             Your final answer MUST be a single JSON object with the specified structure.
@@ -198,53 +179,139 @@ class ContentQualityAgent:
                     "grammar_and_spelling": <Score 1-10, based on YOUR analysis. Deduct points for errors.>,
                     "readability": <Score 1-10, from the ReadabilityCheck tool output>,
                     "professionalism_and_tone": <Score 1-10, from the ProfessionalismCheck tool output>,
-                    "factual_accuracy": <Score 1-10. Default to 10 if no claims to check or if FactCheckSearch finds no errors.>,
-                    "redundancy": <Score 1-10, from the RedundancyCheck tool output>
+                    "redundancy": <Score 1-10, from the RedundancyCheck tool output>,
+                    "factual_accuracy": <Score 1-10, based on YOUR analysis. Deduct points for factual errors. Default to 10 if no verifiable claims are made or no errors are found.>
                 }},
                 "score_explanations": {{
                     "grammar_and_spelling": "<Explanation for grammar score, including a list of errors YOU found (e.g., 'Spelling error: "wrogn" should be "wrong"'). If no errors, say 'No errors found.'>",
                     "readability": "<Explanation for readability score, from the ReadabilityCheck tool output>",
                     "professionalism_and_tone": "<Explanation for professionalism score, from the ProfessionalismCheck tool output>",
-                    "factual_accuracy": "<Explanation for factual accuracy score. If claims were checked, summarize findings.>",
-                    "redundancy": "<Explanation for redundancy score, from the RedundancyCheck tool output>"
+                    "redundancy": "<Explanation for redundancy score, from the RedundancyCheck tool output>",
+                    "factual_accuracy": "<Explanation for factual accuracy score. List any factual errors YOU found (e.g., 'Factual error: "The sun is green" is incorrect.'). If no errors, say 'No factual errors found.'>"
                 }},
                 "summary": "<A natural language summary of key issues and suggestions for improvement.>"
             }}
             """),
-            ("human", "{input}"),
-            ("placeholder", "{agent_scratchpad}"),
+            ("human", """Here is all the data. Please synthesize the final report.
+
+            **ORIGINAL TEXT:**
+            ---
+            {input_text}
+            ---
+
+            **TOOL REPORTS:**
+            ---
+            Readability Report:
+            {readability_report}
+
+            Professionalism Report:
+            {professionalism_report}
+
+            Length/Structure Report:
+            {length_report}
+
+            Redundancy Report:
+            {redundancy_report}
+            ---
+            """),
         ])
         
-        agent = create_openai_functions_agent(self.llm, tools, prompt)
-        self.agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=(log_level == "DEBUG"))
+        # Create a simple chain, not a complex agent
+        self.synthesizer_chain = self.synthesizer_prompt | self.llm
 
     async def validate_async(self, input_text: str) -> Dict[str, Any]:
-        """Runs the agent asynchronously on a plain text string."""
+        """
+        Runs the full validation process:
+        1. Runs all local tools instantly.
+        2. Makes ONE LLM call to synthesize the results.
+        """
         
-        prompt = f"Please provide a comprehensive quality analysis of the following text:\n---\n{input_text}\n---"
+        # --- STEP 1: Run all local tools ---
+        logging.info("Running local tool: ReadabilityCheck")
+        readability_report = check_readability_with_textstat(input_text)
         
-        result = {} 
+        logging.info("Running local tool: ProfessionalismCheck")
+        professionalism_report = check_professionalism_with_library(input_text)
+        
+        logging.info("Running local tool: LengthAndStructureCheck")
+        length_report = check_length_and_structure(input_text)
+        
+        logging.info("Running local tool: RedundancyCheck")
+        redundancy_report = check_redundancy(input_text)
+
+        # --- STEP 2: Make ONE LLM call to synthesize everything ---
+        logging.info("Making single, final LLM call to synthesize results (with grammar + fact check)...")
         try:
-            result = await self.agent_executor.ainvoke({"input": prompt})
+            # We parse the tool outputs to get just the score for the final LLM
+            readability_data = json.loads(readability_report)
+            professionalism_data = json.loads(professionalism_report)
+            redundancy_data = json.loads(redundancy_report)
+
+            # Pass all data to the synthesizer
+            result = await self.synthesizer_chain.ainvoke({
+                "input_text": input_text,
+                "readability_report": readability_report,
+                "professionalism_report": professionalism_report,
+                "length_report": length_report,
+                "redundancy_report": redundancy_report
+            })
             
-            json_match = re.search(r'\{.*\}', result['output'], re.DOTALL)
+            # --- STEP 3: Parse the final JSON response ---
+            raw_output = result.content
+            json_match = re.search(r'\{.*\}', raw_output, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group(0))
+                final_report = json.loads(json_match.group(0))
+                
+                # --- 🚀 EXTRA LOGIC: Add the tool scores to the final report ---
+                if "category_scores" not in final_report:
+                    final_report["category_scores"] = {}
+                if "score_explanations" not in final_report:
+                    final_report["score_explanations"] = {}
+                    
+                final_report["category_scores"]["readability"] = readability_data.get("readability_score", 5)
+                final_report["score_explanations"]["readability"] = readability_data.get("score_explanation", "No explanation.")
+                
+                final_report["category_scores"]["professionalism_and_tone"] = professionalism_data.get("score", 5)
+                final_report["score_explanations"]["professionalism_and_tone"] = professionalism_data.get("score_explanation", "No explanation.")
+
+                final_report["category_scores"]["redundancy"] = redundancy_data.get("score", 5)
+                final_report["score_explanations"]["redundancy"] = redundancy_data.get("score_explanation", "No explanation.")
+
+                # Calculate overall score if missing (and ensure LLM-generated scores are present)
+                if "grammar_and_spelling" not in final_report["category_scores"]:
+                    final_report["category_scores"]["grammar_and_spelling"] = 10 # Default to 10 if LLM forgets
+                
+                # --- 🚀 NEW: Add default for factual_accuracy ---
+                if "factual_accuracy" not in final_report["category_scores"]:
+                    final_report["category_scores"]["factual_accuracy"] = 10 # Default to 10
+                
+                if "overall_score" not in final_report:
+                    scores = [
+                        final_report["category_scores"].get("grammar_and_spelling", 5),
+                        final_report["category_scores"].get("readability", 5),
+                        final_report["category_scores"].get("professionalism_and_tone", 5),
+                        final_report["category_scores"].get("redundancy", 5),
+                        final_report["category_scores"].get("factual_accuracy", 10) # --- 🚀 NEW ---
+                    ]
+                    final_report["overall_score"] = int(round(sum(scores) / len(scores)))
+
+                return final_report
             else:
-                logging.error(f"No JSON object found in agent output: {result['output']}")
-                raise json.JSONDecodeError("No JSON object found in agent output.", result.get('output', ''), 0)
+                logging.error(f"No JSON object found in synthesizer output: {raw_output}")
+                return {"error": "Failed to parse synthesizer JSON output.", "raw_output": raw_output}
+        
         except (json.JSONDecodeError, KeyError) as e:
-            logging.error(f"❌ Error during agent execution or parsing: {e}")
-            return {"error": "Failed to generate a valid report.", "raw_output": result.get('output', 'No output was generated.')}
+            logging.error(f"❌ Error during synthesis or parsing: {e}")
+            return {"error": "Failed to generate a valid report.", "raw_output": str(e)}
         except Exception as e:
-            logging.error(f"❌ Unexpected agent error: {e}")
-            return {"error": f"An unexpected error occurred: {str(e)}", "raw_output": "Agent execution failed."}
+            logging.error(f"❌ Unexpected synthesis error: {e}")
+            return {"error": f"An unexpected error occurred: {str(e)}", "raw_output": "Synthesis failed."}
 
 
 # ==============================================================================
 # 4. FASTAPI APP INITIALIZATION
 # ==============================================================================
-
+# ... (No changes here) ...
 app = FastAPI(
     title="Content Quality Agent API",
     description="API for running comprehensive quality checks on text from plain text or MongoDB."
@@ -253,7 +320,7 @@ app = FastAPI(
 # ==============================================================================
 # 5. PYDANTIC MODELS
 # ==============================================================================
-
+# ... (No changes here) ...
 class ValidationRequest(BaseModel):
     plain_text: str
     save_report: bool = False
@@ -271,19 +338,19 @@ class StructuredDocRequest(BaseModel):
 # ==============================================================================
 # 6. MONGODB CONFIG & HELPERS
 # ==============================================================================
-
+# ... (No changes here) ...
 DB_NAME = os.getenv("MONGODB_DB_NAME", "quality_db")
 REPORTS_COLLECTION = "reports" 
 
 # ==============================================================================
 # 7. GLOBAL AGENT INITIALIZATION
 # ==============================================================================
-
+# ... (No changes here) ...
 logging.info("🚀 Initializing Content Quality Agent for the API...")
 validator: Optional[ContentQualityAgent] = None
 
-if not os.getenv("OPENAI_API_KEY") or not os.getenv("TAVILY_API_KEY"):
-    logging.critical("❌ FATAL ERROR: API keys (OPENAI_API_KEY, TAVILY_API_KEY) must be in .env file.")
+if not os.getenv("OPENAI_API_KEY"): # --- 🚀 REMOVED TAVILY CHECK, NO LONGER NEEDED ---
+    logging.critical("❌ FATAL ERROR: API key OPENAI_API_KEY must be in .env file.")
     validator = None
 elif not os.getenv("MONGODB_URL"):
     logging.critical("❌ FATAL ERROR: MONGODB_URL must be in .env file.")
@@ -302,7 +369,7 @@ else:
 # ==============================================================================
 # 8. FASTAPI EVENTS
 # ==============================================================================
-
+# ... (No changes here) ...
 @app.on_event("startup")
 async def startup_db_client():
     """Connect to MongoDB on server startup."""
@@ -336,8 +403,7 @@ async def shutdown_db_client():
 # ==============================================================================
 # 9. FASTAPI ENDPOINTS
 # ==============================================================================
-
-# --- This is the endpoint I added in the last step ---
+# ... (No changes here) ...
 @app.get("/reports/{report_id}", tags=["Reports"])
 async def http_get_report_by_id(report_id: str, fastApiRequest: Request):
     """
@@ -420,6 +486,8 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     """
     Fetch a document from MongoDB, run quality analysis on a field,
     and save the report to the 'reports' collection.
+    
+    This endpoint NOW supports dot notation for 'field_to_check' (e.g., "data.transcript").
     """
     if validator is None:
         raise HTTPException(status_code=500, detail="Server not configured. Missing API keys or failed to init.")
@@ -430,6 +498,7 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     db = fastApiRequest.app.state.db
     doc_id = None
 
+    # --- 1. Fetch the document ---
     try:
         doc_id = ObjectId(request.source_document_id)
         logging.info(f"Fetching doc {doc_id} from collection {request.source_collection}")
@@ -440,13 +509,28 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     if not document:
         raise HTTPException(status_code=404, detail=f"Document not found with ID {request.source_document_id} in collection {request.source_collection}")
 
-    text_to_check = document.get(request.field_to_check)
-    
+    # --- 2. Extract the text (with dot-notation fix) ---
+    text_to_check = None
+    try:
+        keys = request.field_to_check.split('.')
+        value = document
+        for key in keys:
+            if isinstance(value, dict):
+                value = value.get(key)
+            else:
+                value = None
+                break
+        text_to_check = value
+    except Exception as e:
+        logging.error(f"Error accessing nested key '{request.field_to_check}': {e}")
+        text_to_check = None
+
     if text_to_check is None:
-        raise HTTPException(status_code=404, detail=f"Field '{request.field_to_check}' not found in document.")
+        raise HTTPException(status_code=404, detail=f"Field '{request.field_to_check}' not found or is null in document.")
     if not isinstance(text_to_check, str) or not text_to_check.strip():
         raise HTTPException(status_code=400, detail=f"Field '{request.field_to_check}' is empty or not a string.")
 
+    # --- 3. Run Validation ---
     logging.info(f"Invoking agent for DB document: {request.source_document_id}")
     report = await validator.validate_async(text_to_check)
 
@@ -454,6 +538,7 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
         logging.error(f"Agent failed for DB document. Raw output: {report.get('raw_output')}")
         raise HTTPException(status_code=500, detail=report)
 
+    # --- 4. Save the report to MongoDB ---
     logging.info(f"Saving report for document: {request.source_document_id}")
     try:
         report_to_save = report.copy()
@@ -474,9 +559,9 @@ async def http_validate_from_db(request: DBValidationRequest, fastApiRequest: Re
     return report
 
 
-# --- 🚀 THIS IS THE ENDPOINT WE ARE CHANGING ---
 @app.post("/validate-structured-doc", tags=["Validation"])
 async def http_validate_structured_doc(request: StructuredDocRequest, fastApiRequest: Request):
+    # ... (No changes here) ...
     """
     Fetches a single complex document, finds all nested text content,
     runs quality analysis on each piece, saves all reports,
@@ -532,13 +617,21 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 
     report_ids = []
     reports_failed = 0
-    # --- 🚀 NEW ---
-    # We will collect all scores and summaries here
     all_scores = []
     all_summaries = []
     
     try:
         cursor = db[request.source_collection].aggregate(pipeline)
+        
+        # --- 🚀 WARNING: THIS LOOP IS STILL SLOW! ---
+        # It's slow because it calls the (now faster) validator
+        # many times in a row.
+        #
+        # A 40-item crawl will still take:
+        # 40 items * 1.5 minutes/item = 60 minutes!
+        #
+        # We must fix this with parallel processing (asyncio.gather)
+        # But for now, the /validate-from-db endpoint is fast.
         
         async for item in cursor:
             text_to_check = item.get("text_to_check")
@@ -548,23 +641,19 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 
             logging.info(f"Validating text from chapter {item.get('source_chapter_id')}")
             
-            report = await validator.validate_async(text_to_check)
+            report = await validator.validate_async(text_to_check) # <-- This is the slow part
 
             if "error" in report:
                 reports_failed += 1
-                logging.error(f"Agent failed for sub-content. Raw: {report.get('raw_output')}")
+                logging.error(f"Agent failed for sub-content. Raw output: {report.get('raw_output')}")
             else:
-                # --- 🚀 NEW ---
-                # Add the score and summary to our lists
                 score = report.get("overall_score")
                 summary = report.get("summary")
                 if score is not None:
                     all_scores.append(score)
                 if summary:
-                    # We add the chapter name to make the summary more useful
                     all_summaries.append(f"Chapter '{item.get('source_chapter_name')}': {summary}")
 
-                # --- This part is the same: we still save the individual report ---
                 try:
                     report_to_save = report.copy()
                     report_to_save["created_at"] = datetime.utcnow()
@@ -580,7 +669,6 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
                     insert_result = await db[REPORTS_COLLECTION].insert_one(report_to_save)
                     report_ids.append(str(insert_result.inserted_id))
                 except Exception as save_e:
-                    # If saving fails, we still count the score, but log the error
                     reports_failed += 1
                     logging.error(f"Failed to SAVE report for chapter {item.get('source_chapter_id')}: {save_e}")
 
@@ -590,15 +678,10 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
 
     logging.info(f"Crawl complete. Generated {len(report_ids)} reports. Failed: {reports_failed}")
 
-    # --- 🚀 NEW ---
-    # Calculate the final average score
     final_average_score = 0
     if all_scores:
-        # We round it to 2 decimal places for a clean look
         final_average_score = round(sum(all_scores) / len(all_scores), 2)
 
-    # --- 🚀 NEW (REVISED) RESPONSE ---
-    # We return the score and summaries, which is what you wanted!
     return {
         "status": "Validation crawl complete",
         "source_document_id": request.source_document_id,
@@ -606,7 +689,7 @@ async def http_validate_structured_doc(request: StructuredDocRequest, fastApiReq
         "reports_generated": len(report_ids),
         "reports_failed": reports_failed,
         "summary_of_issues": all_summaries,
-        "report_ids": report_ids # We still include these, just in case
+        "report_ids": report_ids
     }
 
 
